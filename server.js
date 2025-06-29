@@ -1,6 +1,4 @@
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-
 import path from 'path';
 import express from 'express';
 import http from 'http';
@@ -8,41 +6,45 @@ import { Server } from 'socket.io';
 import ACTIONS from './src/Actions.js';
 import cors from 'cors';
 
-dotenv.config();
+// Configure environment
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const isProduction = process.env.NODE_ENV === 'production';
+const PORT = process.env.PORT || 5000;
 
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for both Express and Socket.IO
+// CORS configuration
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: isProduction 
+    ? process.env.FRONTEND_URL 
+    : 'http://localhost:5173',
   methods: ['GET', 'POST'],
   credentials: true
 };
 
 app.use(cors(corsOptions));
 
-// Socket.IO Server with proper CORS configuration
+// Socket.IO with production-ready settings
 const io = new Server(server, {
   cors: corsOptions,
-  transports: ['websocket', 'polling'], // Fallback to polling if needed
-  pingTimeout: 60000, // Increase timeout for debugging
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
   pingInterval: 25000
 });
 
-// Define __filename and __dirname in ESM
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// View engine setup
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Routes
-app.get('/', (req, res) => {
-  res.render('index', { title: 'Real-time Code Editor' });
-});
+// Serve static files in production
+if (isProduction) {
+  app.use(express.static(path.join(__dirname, 'dist')));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.send('Development server running');
+  });
+}
 
 // Socket.IO Logic
 const userSocketMap = {};
@@ -58,32 +60,17 @@ function getAllConnectedClients(roomId) {
 io.on('connection', (socket) => {
   console.log('✅ Socket connected:', socket.id);
 
-  // Handle connection errors
-  socket.on('connect_error', (err) => {
-    console.error('Connection error:', err.message);
-  });
-
   socket.on(ACTIONS.JOIN, ({ roomId, username }) => {
-    try {
-      if (!roomId || !username) {
-        throw new Error('Room ID and username are required');
-      }
-
-      userSocketMap[socket.id] = username;
-      socket.join(roomId);
-
-      const clients = getAllConnectedClients(roomId);
-      clients.forEach(({ socketId }) => {
-        io.to(socketId).emit(ACTIONS.JOINED, {
-          clients,
-          username,
-          socketId: socket.id
-        });
+    userSocketMap[socket.id] = username;
+    socket.join(roomId);
+    const clients = getAllConnectedClients(roomId);
+    clients.forEach(({ socketId }) => {
+      io.to(socketId).emit(ACTIONS.JOINED, {
+        clients,
+        username,
+        socketId: socket.id
       });
-    } catch (error) {
-      console.error('JOIN error:', error.message);
-      socket.emit('error', { message: error.message });
-    }
+    });
   });
 
   socket.on(ACTIONS.CODE_CHANGE, ({ roomId, code }) => {
@@ -103,28 +90,16 @@ io.on('connection', (socket) => {
       });
     });
     delete userSocketMap[socket.id];
-    console.log(`🚪 Socket disconnected: ${socket.id}`);
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`❌ Socket disconnected: ${socket.id}`);
   });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send('Something broke!');
-});
-
-// Server listening
-const PORT = process.env.PORT || 4000;
+// Start server
 server.listen(PORT, () => {
-  console.log(`🚀 Server is running at http://localhost:${PORT}`);
-  console.log(`⚡ Socket.IO is running on port ${PORT}`);
-});
-
-// Handle server errors
-server.on('error', (error) => {
-  console.error('Server error:', error);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`⚡ Socket.IO ready`);
+  console.log(`🌐 Environment: ${isProduction ? 'Production' : 'Development'}`);
+  if (!isProduction) {
+    console.log(`🔗 Frontend: http://localhost:5173`);
+    console.log(`🔗 Backend: http://localhost:${PORT}`);
+  }
 });
